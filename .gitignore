@@ -17,4 +17,4 @@ buildNumber.properties
 .classpath
 
 # class file
-/build/
+.class
