@@ -41,9 +41,64 @@ AppConfig 처럼 의존관계 주입을 해주는 것을 IoC 컨테이너 또는
 또는 어셈블러, 오브젝트 팩토리 등으로 불리기도 한다.
 
 ### Spring
-- ApplicationContext : 스프링 컨테이너
+- ApplicationContext : 스프링 컨테이너. 인터페이스.
 - @Configuration : 구성정보
 - @Bean : @Bean이 붙은 메서드의 명을 key로 리턴값을 value로 스프링 컨테이너에 등록한다. 이렇게 등록된 Bean을 스프링빈이라고 한다.
 - 이제 스프링 컨테이너에서 필요한 스프링 빈을 찾아야 한다. (ac.getBean())
 
+### ApplicationContext
+인터페이스. XML 기반으로 만들 수 있고 어노테이션 기반으로도 만들 수 있다. (임의로 만들 수도 있다.)
+어노테이션 기반으로 구현하려면 아래와 같다.
+```java
+ApplicationContext ac = new AnnotationConfigApplicationContext(AppConfig.class);
+```
+원래는 BeanFactory, ApplicationContext를 구분해서 이야기하기도 하는데 
+BeanFactory를 직접 쓰는 경우는 많이 없으므로 일반적으로 ApplicationContext를 스프링 컨테이너라고 한다.
+
+
+### Bean
+빈 이름은 메서드명. 빈 이름을 직접 지정할 수도 있다. 빈 이름이 중복된다면 문제가 발생하기 때문에 조심.
+
+### 스프링 컨테이너를 생성한다면..
+1. 스프링 컨테이너 생성
+2. 스프링 컨테이너 생성 내 스프링 빈 저장소에 빈 이름 - 빈 객체 구조로 저장.
+3. 스프링 빈 의존관계 설정 : 스프링 컨테이너는 설정 정보를 참고해서 의존관계를 주입한다.
+
+### GenericXmlApplicationContext
+XML을 사용하면 컴파일 없이 빈 설정 정보를 변경할 수 있다.
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+
+    <bean id="memberService" class="hello.core.member.MemberServiceImpl" >
+        <constructor-arg name="memberRepository" ref="memberRepository" />
+    </bean>
+
+    <bean id="memberRepository" class="hello.core.member.MemoryMemberRepository"/>
+
+    <bean id="orderService" class="hello.core.order.OrderServiceImpl" >
+        <constructor-arg name="memberRepository" ref="memberRepository" />
+        <constructor-arg name="discountPolicy" ref="discountPolicy" />
+    </bean>
+
+    <bean id="discountPolicy" class="hello.core.discount.RateDiscountPolicy" >
+    </bean>
+</beans>
+```
+AppConfig.java와 거의 유사함을 알 수 있다.
+
+### BeanDefinition
+Xml을 이용해서 bean 설정을 하나 class를 이용해서 하나 ApplicationContext에서 빈 설정 정보를 읽을 수 있는 것은
+ApplicationContext가 BeanDefinition을 이용해 빈 설정 정보를 읽기 때문이다.
+- BeanDefinition에 있는 정보
+  - BeanClassName : 생성할 빈의 클래스 명 (java를 이용할 때처럼 팩토리 역할 빈을 사용하면 없음.)
+  - factoryBeanName : 팩토리 역할의 빈을 사용할 결우 이름 (appConfig)
+  - factoryMethodName : 빈을 생성할 팩토리 메서드 지정 (memberService)
+  - Scope : 싱글톤(기본값)
+  - lazyInit : 스프링 컨테이너를 생설할 때 빈을 생성하는 것이 아니라 실제 빈을 사용할 때까지 최대한 생성을 지연처리 하는지 여부
+  - InitMehodName : 빈을 생성하고 의존관계를 적용한 뒤에 호출되는 초기화 메서드 명
+  - DestroyMethodName : 빈의 생명주기가 끝나서 제거하기 직전에 호출되는 메서드 명
+  - Constructor argument, Properties : 의존관계 주입에서 사용. (java를 이용할 때처럼 팩토리 역할 빈을 사용하면 없음.)
 
