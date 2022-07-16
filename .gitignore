@@ -21,3 +21,7 @@ buildNumber.properties
 /build/
 *.class
 /out/
+bin
+
+# setting file
+.settings
