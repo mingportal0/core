@@ -194,6 +194,7 @@ basePackage =  {"hello.core", "hello.sub"} 처럼 여러개를 넣을 수도 있
 # 롬복과 최신 트랜드
 - @RequiredArgsConstructor를 사용하면 final이 붙은 필드에 대해 생성자를 만들어준다.
 ```java
+// OrderServiceImpl.java
 @Component
 @RequiredArgsConstructor
 public class OrderServiceImpl implements OrderService{
@@ -202,4 +203,165 @@ public class OrderServiceImpl implements OrderService{
     private final DiscountPolicy discountPolicy;
 }
 ```
+
+# @Autowired
+## @Autowired
+여러 빈이 있으면 필드이름, 파라미터 이름으로 빈 이름을 추가 매칭한다.
+예를 들면 DiscountPolicy에 RateDiscountPolicy와 FixDiscountPolicy를 매칭하면 오류가 날 것이다.
+```java
+// OrderServiceImpl.java
+public OrderServiceImpl(MemberRepository memberRepository, DiscountPolicy rateDiscountPolicy) {
+	this.memberRepository = memberRepository;
+	this.discountPolicy = rateDiscountPolicy;
+}
+//이것도 된다.
+@Autowired
+private final DiscountPolicy discountPolicy;
+```
+DiscountPolicy 파라미터 이름을 rateDiscountPolicy으로 주면 알아서 RateDiscountPolicy를 매칭한다.
+그러면 에러가 해결된다.
+
+그래서 @Autowired는
+1. 타입으로 매칭한다.
+2. 타입 매칭 결과가 2개 이상 일때는 필드이름, 파라미터 이름으로 빈 이름을 추가 매칭한다.
+
+## @Qualifier
+추가적인 구분자를 붙여주는 방식이다.
+```java
+// RateDiscountPolicy.java
+@Component
+@Qualifier("mainDiscountPolicy")
+public class RateDiscountPolicy implements DiscountPolicy{
+}
+
+// OrderServiceImpl.java
+public OrderServiceImpl(MemberRepository memberRepository, @Qualifier("mainDiscountPolicy") DiscountPolicy discountPolicy) {
+	this.memberRepository = memberRepository;
+	this.discountPolicy = discountPolicy;
+}
+```
+@Qualifier는
+1. @Qualifier 끼리 매칭
+2. 빈 이름 매칭
+
+## @Primary
+우선순위를 지정하는 방법. @Autowired 타입 매칭 결과가 2개 이상일 때 @Primary가 있으면 우선권을 가진다.
+```java
+// RateDiscountPolicy.java
+@Component
+@Primary
+public class RateDiscountPolicy implements DiscountPolicy{
+}
+
+// OrderServiceImpl.java
+public OrderServiceImpl(MemberRepository memberRepository, DiscountPolicy discountPolicy) {
+	this.memberRepository = memberRepository;
+	this.discountPolicy = discountPolicy;
+}
+```
+RateDiscountPolicy에 @Primary가 있기 때문에 RateDiscountPolicy가 주입된다.
+
+## @Qualifier, @Primary 활용
+메인 데이터베이스에 @Primary를 주고 서브 데이터베이스에 @Qualifier를 줘서 특별한 경우일 때 @Qualifier를 써서 명시적으로 스프링 빈을 획득할 수 있다.
+
+# Annotaion 직접 만들기
+아까 @Qualifier를 쓸 때 문자열을 직접 넣어야 하기 때문에 잘못입력한다면 컴파일 단계에서 오류를 잡을 수 없다.
+그래서 Annotaion을 만들어서 해결해보자.
+```java
+// MainDiscountPolicy.java
+@Target({ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER, ElementType.TYPE, ElementType.ANNOTATION_TYPE})
+@Retention(RetentionPolicy.RUNTIME)
+@Inherited
+@Documented
+@Qualifier("mainDiscountPolicy")
+public @interface MainDiscountPolicy {
+
+}
+```
+사용은 이렇게 할 수 있다.
+```java
+// MainDiscountPolicy.java
+@Component
+@RateDiscountPolicy
+public class RateDiscountPolicy implements DiscountPolicy{
+}
+
+// OrderServiceImpl.java
+public OrderServiceImpl(MemberRepository memberRepository, @MainDiscountPolicy DiscountPolicy discountPolicy) {
+}
+```
+
+# 조회한 빈이 모두 필요할 때 List, Map
+의도적으로 해당 빈이 모두 필요할 수도 있다. 예를 들면 고객이 고정 할인 방식, 비율 할인 방식 중 선택해 사용하는 것이다.
+```java
+public class AllBeanTest {
+
+	@Test
+	void findAllBean() {
+		ApplicationContext ac = new AnnotationConfigApplicationContext(AutoAppConfig.class, DiscountService.class);
+		
+		DiscountService discountPolicy = ac.getBean(DiscountService.class);
+		Member member = new Member(1L, "userA", Grade.VIP);
+		
+		assertThat(discountPolicy).isInstanceOf(DiscountService.class);
+		
+		int fixDiscountPrice = discountPolicy.discount(member, 10000, "fixDiscountPolicy");
+		assertThat(fixDiscountPrice).isEqualTo(1000);
+		
+		int rateDiscountPrice = discountPolicy.discount(member, 10000, "rateDiscountPolicy");
+		assertThat(rateDiscountPrice).isEqualTo(1000);
+	}
+	
+	static class DiscountService{
+		private final Map<String, DiscountPolicy> policyMap;
+		private final List<DiscountPolicy> policies;
+		
+		public DiscountService(Map<String, DiscountPolicy> policyMap, List<DiscountPolicy> policies) {
+			this.policyMap = policyMap;
+			this.policies = policies;
+			System.out.println("policyMap = " + policyMap);
+			System.out.println("policies = " + policies);
+		}
+
+		public int discount(Member member, int price, String discountCode) {
+			DiscountPolicy discountPolicy = policyMap.get(discountCode);
+			int discountPrice = discountPolicy.discount(member, price);
+			return discountPrice;
+		}
+	}
+}
+```
+위와 같이 Map으로 DiscountPolicy의 스프링빈을 모두 가져와서 원하는 대로 선택해 쓸 수 있다.
+
+# 자동, 수동의 올바른 실무 운영 기준
+## 편리한 자동 기능을 기본으로 사용하자.
+## 수동 빈은 언제 사용할까?
+- 업무 로직 빈 : 웹을 지원하는 컨트롤러, 핵심 비즈니스 로직이 있는 서비스, 데이터 계층을 관리하는 리포지토리.
+- 업무 오직 빈은 가급적 자동 빈 등록을 하는 게 좋다. 
+하지만 DiscountPolicy 처럼 다형성을 활용하는 스프링 빈은 수동 빈으로 등록하는 게 한눈에 보기 편해서 좋다.
+아래와 같이 수동으로 등록하면 한눈에 보기 편하다.
+```java
+@Configuration
+public class DiscountPolicyConfig{
+
+	@Bean
+	public DiscountPolicy rateDiscountPolicy(){
+		return new RateDiscountPolicy();
+	}
+	@Bean
+	public DiscountPolicy fixDiscountPolicy(){
+		return new FixDiscountPolicy();
+	}
+}
+```
+- 기술 지원 빈 : 데이터베이스 연결, 공통 로그 처리 처럼 업무 로직을 지원하기 위한 하부 기술이나 공통 기술이다.
+- 기술 지원 로직은 업무 로직과 비교해 숫자가 매우 적고 애플리케이션 전반에 걸쳐 광범위하게 영향을 미친다. 
+그래서 가급적 수동 빈 등록을 해야 문제가 나타났을 때 문제 파악하기에 용이하다.
+- 스프링이나 스프링부트가 자동으로 등록하는 빈에 대해서는 스프링이 의도하는 대로 쓰는 것이 좋다. 
+예를 들면 스프링 부트의 DataSource의 경우 자동으로 등록되기 때문에 스프링의 의도에 맞게 잘 쓰는 게 좋다.
+
+# 빈 생명주기 콜백
+## 빈 생명주기 콜백 시작
+데이터베이스 커넥션 풀이나 네트워크 소켓처럼 애플리케이션 시작에 미리 연결을 해두고 애플리케이션 종료 때 이 연결을 모두 종료하는 작업이 필요하다.
+스프링에서 이 작업을 진행하려면 객체의 초기화와 종료 작업을 해야 한다.
 
