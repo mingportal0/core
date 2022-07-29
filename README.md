@@ -364,4 +364,389 @@ public class DiscountPolicyConfig{
 ## 빈 생명주기 콜백 시작
 데이터베이스 커넥션 풀이나 네트워크 소켓처럼 애플리케이션 시작에 미리 연결을 해두고 애플리케이션 종료 때 이 연결을 모두 종료하는 작업이 필요하다.
 스프링에서 이 작업을 진행하려면 객체의 초기화와 종료 작업을 해야 한다.
+- 예제
+```java
+public class NetworkClient {
+
+	private String url;
+	
+	public NetworkClient() {
+		System.out.println("생성자 호출, url = " + url);
+		connect();
+		call("초기화 연결 메세지");
+	}
+
+	public void setUrl(String url) {
+		this.url = url;
+	}
+
+	//서비스 시작 시 호출
+	public void connect() {
+		System.out.println("connect: " + url);
+	}
+	
+	public void call(String message) {
+		System.out.println("call: " + url + " message: " + message);
+	}
+	
+	//서비스 종료 시 호출
+	public void disconnect(String message) {
+		System.out.println("close: " + url);
+	}
+}
+
+public class BeanLifeCycleTest {
+
+	@Test
+	public void lifecycleTest() {
+		ConfigurableApplicationContext ac = new AnnotationConfigApplicationContext(LifeCyclConfig.class);
+		NetworkClient client = ac.getBean(NetworkClient.class);
+		
+		ac.close();
+	}
+	
+	@Configuration
+	static class LifeCyclConfig{
+		
+		@Bean
+		public NetworkClient networkClient() {
+			NetworkClient networkClient = new NetworkClient();
+			networkClient.setUrl("http://hello-spring.dev");
+			return networkClient;			
+		}
+	}
+}
+```
+```terminal
+생성자 호출, url = null
+connect: null
+call: null message: 초기화 연결 메세지
+00:54:50.675 [main] DEBUG org.springframework.context.annotation.AnnotationConfigApplicationContext - Closing org.springframework.context.annotation.AnnotationConfigApplicationContext@22a637e7, started on Sat Jul 30 00:54:50 KST 2022
+```
+예제처럼 url이 null이 아닌 의존관계가 끝났을 때를 알아야 connect()를 호출할 수 있을 것이다.
+- 스프링 빈의 이벤트 라이프사이클
+스프링 컨테이너 생성 -> 스프링 빈 생성 -> 의존관계 주입 -> 초기화 콜백 -> 사용 -> 소멸빈 콜백 -> 스프링 종료
+
+> 참고) 객체의 생성과 초기화를 분리하자.
+객체는 생성 및 필수 정보만 넣고 초기화는 이렇게 생성된 값들을 이용해 커넥션을 연결하는 등 무거운 동작을 하는 게 좋다.
+이렇게 쓰면 객체 생성 후 최초 액션 시 초기화를 호출하는 지연의 방식을 사용할 수도 있다.
+
+스프링은 3가지의 빈 생명주기 콜백을 지원한다.
+
+## 인터페이스 InitializingBean, DisposableBean
+```java
+public class NetworkClient implements InitializingBean, DisposableBean{
+
+	private String url;
+	
+	public NetworkClient() {
+		System.out.println("생성자 호출, url = " + url);
+	}
+
+	public void setUrl(String url) {
+		this.url = url;
+	}
+
+	//서비스 시작 시 호출
+	public void connect() {
+		System.out.println("connect: " + url);
+	}
+	
+	public void call(String message) {
+		System.out.println("call: " + url + " message: " + message);
+	}
+	
+	//서비스 종료 시 호출
+	public void disconnect() {
+		System.out.println("close: " + url);
+	}
+
+	@Override
+	public void afterPropertiesSet() throws Exception {
+		connect();
+		call("초기화 연결 메세지");
+	}
+
+	@Override
+	public void destroy() throws Exception {
+		disconnect();
+	}
+}
+```
+```terminal
+생성자 호출, url = null
+connect: http://hello-spring.dev
+call: http://hello-spring.dev message: 초기화 연결 메세지
+00:53:25.975 [main] DEBUG org.springframework.context.annotation.AnnotationConfigApplicationContext - Closing org.springframework.context.annotation.AnnotationConfigApplicationContext@22a637e7, started on Sat Jul 30 00:53:25 KST 2022
+close: http://hello-spring.dev
+```
+- 이렇게 쓰면 스프링 인터페이스에 의존적이다. 
+- 메서드 이름을 마음대로 정할 수 없다.
+- 내가 고칠 수 없는 외부 라이브러리에 사용할 수 없다.
+
+## 빈 등록 초기화, 소멸 메서드
+`@Bean(initMethod = "init", destroyMethod = "close")`와 같이 쓴다.
+`destroyMethod = "(inferred)"`라서 destroyMethod를 지정하지 않으면 기본값으로 close나 shutdown라는 이름의 메서드를 자동으로 호출해준다.
+이 추론 기능을 사용하기 싫으면 `destroyMethod = ""`로 주면 된다.
+```java
+public class BeanLifeCycleTest {
+
+	@Test
+	public void lifecycleTest() {
+		ConfigurableApplicationContext ac = new AnnotationConfigApplicationContext(LifeCyclConfig.class);
+		NetworkClient client = ac.getBean(NetworkClient.class);
+		
+		ac.close();
+	}
+	
+	@Configuration
+	static class LifeCyclConfig{
+		
+		@Bean(initMethod = "init", destroyMethod = "close")
+		public NetworkClient networkClient() {
+			NetworkClient networkClient = new NetworkClient();
+			networkClient.setUrl("http://hello-spring.dev");
+			return networkClient;			
+		}
+	}
+}
+```
+## @PostConstruct, @PreDestroy
+최신 스프링에서 권장하는 방법
+import 문을 보면 `import javax.annotation.PostConstruct`라서 JSR-2050이라는 자바 표준이다.
+하지만 외부 라이브러리에는 못써서 @Bean initMethod, destroyMethod 방법을 써야 한다.
+- @PostConstruct은 초기화 콜백
+- @PreDestroy은 소멸빈 콜백
+```java
+public class NetworkClient{
+
+	private String url;
+	
+	public NetworkClient() {
+		System.out.println("생성자 호출, url = " + url);
+	}
+
+	public void setUrl(String url) {
+		this.url = url;
+	}
+
+	//서비스 시작 시 호출
+	public void connect() {
+		System.out.println("connect: " + url);
+	}
+	
+	public void call(String message) {
+		System.out.println("call: " + url + " message: " + message);
+	}
+	
+	//서비스 종료 시 호출
+	public void disconnect() {
+		System.out.println("close: " + url);
+	}
+
+	@PostConstruct
+	public void init() throws Exception {
+		connect();
+		call("초기화 연결 메세지");
+	}
+
+	@PreDestroy
+	public void close() throws Exception {
+		disconnect();
+	}
+}
+```
+
+# 빈 스코프
+스프링은 다양한 스코프를 지원한다.
+- 싱글톤 스코프 : 기본. 스프링 컨테이너의 시작과 종료까지 유지. 가장 넓은 스코프.
+- 프로토타입 스코프 : 스프링 컨테이너는 빈의 생성과 의존관계 주입, 초기화 메서드까지만 관여한다.
+- 웹 관련 스코프
+	- request : 웹 요청이 들어오고 나갈 때 까지 유지되는 스코프.
+	- session : 웹 세션이 생성되고 종료될 때 까지 유지되는 스코프.
+	- application : 웹의 서블릿 컨텍스트와 같은 범위로 유지되는 스코프.
+	
+## 프로토타입 스코프
+프로토 타입으로 만든 스프링 컨테이너는 고객이 스프링 빈을 요청할 시 요청 때마다 다른 빈을 반환한다.
+그래서 @PreDestory 같은 메서드는 호출되지 않는다. 그래서 클라이언트가 종료 메서드를 호출해야 한다.
+```java
+public class PrototypeTest {
+
+	@Test
+	void prototypeBeanFind() {
+		AnnotationConfigApplicationContext ac = new AnnotationConfigApplicationContext(PrototypeBean.class);
+		System.out.println("find prototypeBean1");
+		PrototypeBean prototypeBean1 = ac.getBean(PrototypeBean.class);
+		System.out.println("find prototypeBean2");
+		PrototypeBean prototypeBean2 = ac.getBean(PrototypeBean.class);
+		System.out.println("prototypeBean1 = " + prototypeBean1);
+		System.out.println("prototypeBean2 = " + prototypeBean2);
+		
+		assertThat(prototypeBean1).isNotSameAs(prototypeBean2);
+		
+		ac.close();
+	}
+	
+	@Scope("prototype")
+	static class PrototypeBean{
+		@PostConstruct
+		public void init() {
+			System.out.println("PrototypeBean init");
+		}
+		
+		@PreDestroy
+		public void destroy() {
+			System.out.println("PrototypeBean destroy");
+		}
+	}
+}
+/* Terminal
+find prototypeBean1
+PrototypeBean init
+find prototypeBean2
+PrototypeBean init
+prototypeBean1 = hello.core.scope.PrototypeTest$PrototypeBean@710c2b53
+prototypeBean2 = hello.core.scope.PrototypeTest$PrototypeBean@5386659f
+01:22:01.159 [main] DEBUG org.springframework.context.annotation.AnnotationConfigApplicationContext - Closing org.springframework.context.annotation.AnnotationConfigApplicationContext@69b2283a, started on Sat Jul 30 01:22:01 KST 2022
+*/
+```
+
+## 프로토타입 빈과 싱글톤 빈을 같이 사용할 떄 생기는 문제
+```java
+public class SingletonWIthPrototypeTest1 {
+
+	@Test
+	void prototypeFind() {
+		AnnotationConfigApplicationContext ac = new AnnotationConfigApplicationContext(PrototypeBean.class);
+		PrototypeBean prototypeBean1 = ac.getBean(PrototypeBean.class);
+		prototypeBean1.addCount();
+		assertThat(prototypeBean1.getCount()).isEqualTo(1);
+		
+		PrototypeBean prototypeBean2 = ac.getBean(PrototypeBean.class);
+		prototypeBean2.addCount();
+		assertThat(prototypeBean2.getCount()).isEqualTo(1);
+		
+		ac.close();
+	}
+	
+	@Test
+	void singletonClientUsePrototype() {
+		AnnotationConfigApplicationContext ac = new AnnotationConfigApplicationContext(ClientBean.class, PrototypeBean.class);
+		
+		ClientBean clientBean1 = ac.getBean(ClientBean.class);
+		int count1 = clientBean1.logic();
+		assertThat(count1).isEqualTo(1);
+		
+		ClientBean clientBean2 = ac.getBean(ClientBean.class);
+		int count2 = clientBean2.logic();
+		assertThat(count2).isEqualTo(2);
+		
+		ac.close();
+	}
+	
+	@Scope("singleton")
+	static class ClientBean{
+		private final PrototypeBean prototypeBean; //생성시점에 이미 주입됨.
+
+		public ClientBean(PrototypeBean prototypeBean) {
+			this.prototypeBean = prototypeBean;
+		}
+		
+		public int logic() {
+			prototypeBean.addCount();
+			int count = prototypeBean.getCount();
+			return count;
+		}
+	}
+	
+	@Scope("prototype")
+	static class PrototypeBean{
+		private int count = 0;
+		
+		public void addCount() {
+			count++;
+		}
+		
+		public int getCount() {
+			return count;
+		}
+		
+		@PostConstruct
+		public void init() {
+			System.out.println("PrototypeBean init " + this);
+		}
+		
+		@PreDestroy
+		public void destroy() {
+			System.out.println("PrototypeBean destroy");
+		}
+	}
+}
+```
+ClientBean 생성 시점에 PrototypeBean이 이미 주입이 끝난 상태라 의도대로 count는 둘다 1이 아니다.
+
+## 해결 방법 - ObjectProvider
+물론 logic에서 스프링 컨테이너에서 매번 PrototypeBean을 가져오면 된다.
+이것을 DL(Dependency Lookup)이라고 한다.
+```java
+@Scope("singleton")
+	static class ClientBean{
+		private final ApplicationContext applicationContext; //생성시점에 이미 주입됨.
+
+		public ClientBean(ApplicationContext applicationContext) {
+			this.applicationContext = applicationContext;
+		}
+		
+		public int logic() {
+			PrototypeBean prototypeBean = applicationContext.getBean(PrototypeBean.class);
+			prototypeBean.addCount();
+			int count = prototypeBean.getCount();
+			return count;
+		}
+	}
+```
+하지만 코드가 너무 더러워진다. ObjectProvider를 사용해 해결 가능하다.
+```java
+@Scope("singleton")
+static class ClientBean{
+	@Autowired
+	private ObjectProvider<PrototypeBean> prototypeBeanProvider;
+	
+	public int logic() {
+		PrototypeBean prototypeBean = prototypeBeanProvider.getObject();
+		prototypeBean.addCount();
+		int count = prototypeBean.getCount();
+		return count;
+	}
+}
+```
+하지만 위 방법은 스프링 인터페이스에 의존적이다. 그래서 JSR-330 자바 표준인 Provider를 쓰는 게 좋다.
+라이브러리 등록이 필요하다.
+```gradle
+dependencies {
+	implementation group: 'javax.inject', name: 'javax.inject', version: '1'
+```
+```java
+@Scope("singleton")
+static class ClientBean{
+	@Autowired
+	private Provider<PrototypeBean> prototypeBeanProvider;
+	
+	public int logic() {
+		PrototypeBean prototypeBean = prototypeBeanProvider.get();
+		prototypeBean.addCount();
+		int count = prototypeBean.getCount();
+		return count;
+	}
+}
+```
+
+## 웹 스코프
+웹 환경에서만 동작한다.
+- request : 웹 요청이 들어오고 나갈 때 까지 유지되는 스코프. HTTP 요청 마다 별도의 빈 객체가 생성됨.
+- session : 웹 세션이 생성되고 종료될 때 까지 유지되는 스코프.
+- application : 웹의 서블릿 컨텍스트와 같은 범위로 유지되는 스코프.
+- websocket : 웹 소켓과 동일한 생명주기를 같는 스코프.
+
+
 
