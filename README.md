@@ -747,6 +747,105 @@ static class ClientBean{
 - session : 웹 세션이 생성되고 종료될 때 까지 유지되는 스코프.
 - application : 웹의 서블릿 컨텍스트와 같은 범위로 유지되는 스코프.
 - websocket : 웹 소켓과 동일한 생명주기를 같는 스코프.
+### request 스코프 구현
+Provider가 없으면 스프링 컨테이너를 올릴 때 오류가 난다.
+왜냐하면 MyLogger의 스코프는 request인데 MyLogger를 DI할 때 request가 없기 때문이다. 
+그래서 Provider를 써서 실제 logic을 호출 할때까지 DI를 미룬다.
+```java
+// MyLogger.java
+@Component
+@Scope(value = "request")
+public class MyLogger {
 
+	private String uuid;
+	private String requestURL;
+	
+	public void setRequestURL(String requestURL) {
+		this.requestURL = requestURL;
+	}
+	
+	public void log(String message) {
+		System.out.println("[" + uuid + "] [" + requestURL + "] " + message);
+	}
+	
+	@PostConstruct
+	public void init() {
+		uuid = UUID.randomUUID().toString();
+		System.out.println("[" + uuid + "] request scope bean create:" + this);
+		
+	}
+	
+	@PreDestroy
+	public void close() {
+		System.out.println("[" + uuid + "] request scope bean close:" + this);
+	}
+}
+// LogDemoController.java
+@Controller
+@RequiredArgsConstructor
+public class LogDemoController {
 
+	private final LogDemoService logDemoService;
+	private final Provider<MyLogger> myLoggerProvider;
+	
+	@RequestMapping("log-demo")
+	@ResponseBody
+	public String logDemo(HttpServletRequest request) {
+		String requestURL = request.getRequestURI().toString();
+		MyLogger myLogger = myLoggerProvider.get();
+		myLogger.setRequestURL(requestURL);
+		
+		myLogger.log("controller test");
+		logDemoService.logic("testId");
+		return "OK";
+	}
+}
+// LogDemoService
+@Service
+@RequiredArgsConstructor
+public class LogDemoService {
 
+	private final Provider<MyLogger> myLoggerProvider;
+	
+	public void logic(String id) {
+		MyLogger myLogger = myLoggerProvider.get();
+		myLogger.log("service id = " + id);
+	}
+}
+
+```
+
+# 스코프와 프록시
+위처럼 Provider를 써서 해결했지만 안쓰고 해결하는 방법은 없을까해서 나온 방법이 프록시를 이용한 방법니다.
+@Scope에 proxyMode를 주고 Provider를 모두 지운 후 스프링 컨테이너를 올리면 에러가 안난다.
+그 이유는 프록시가 가짜 객체를 만들어 스프링 컨테이너가 올라갈 때 가짜를 대신 주입하기 때문이다.
+```java
+// MyLogger.java
+@Component
+@Scope(value = "request", proxyMode = ScopedProxyMode.TARGET_CLASS)
+public class MyLogger {
+
+	private String uuid;
+	private String requestURL;
+	
+	public void setRequestURL(String requestURL) {
+		this.requestURL = requestURL;
+	}
+	
+	public void log(String message) {
+		System.out.println("[" + uuid + "] [" + requestURL + "] " + message);
+	}
+	
+	@PostConstruct
+	public void init() {
+		uuid = UUID.randomUUID().toString();
+		System.out.println("[" + uuid + "] request scope bean create:" + this);
+		
+	}
+	
+	@PreDestroy
+	public void close() {
+		System.out.println("[" + uuid + "] request scope bean close:" + this);
+	}
+}
+```
